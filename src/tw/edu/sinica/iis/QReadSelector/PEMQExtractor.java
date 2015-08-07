@@ -20,9 +20,9 @@
 
 /* 
  *  This program will extract the minimalQ of each pair of reads.
- *  It takes the result of PEMinimalQ as its input.
+ *  It takes shuffled fastq file as its input.
  *  
- *  Usage:  PEMQExtractor [result of PEMinimalQ] [output]
+ *  Usage:  PEMQExtractor [input (fastq)] [output]
  */
 
 package tw.edu.sinica.iis.QReadSelector;
@@ -36,11 +36,21 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.NLineInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 
 public class PEMQExtractor {
+	static int count = 0;
+	static String str1 = null;
+	static String Qstr1 = null;
+	static String id2[] = null;
+	static String str2 = null;
+	static String Qstr2 = null;
+	static String id1[] = null;
+	static char minimal1 = 'J';
+	static char minimal2 = 'J';
+
 	final static boolean compress = true;
 	// number of reducer tasks
 	final static int numOfReducers = 0;
@@ -55,12 +65,72 @@ public class PEMQExtractor {
 		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
 
 			Text result = new Text();
-			/* id1 Read1 MinimalQ1 id2 Read2 MinimalQ2 */
-			String[] lineArray = value.toString().split("\t", 6);
+			/*
+			 * since the input is shuffled fastq file, mapper regard 8 lines as
+			 * an unit. line 1: id1 line 2: Read1 line 3: + line 4: Qstr1 line
+			 * 5: id2 line 6: Read2 line 7: + line 8: Qstr2
+			 */
+			switch (count) {
+			case 0:
+				id1 = value.toString().split(" ", 2);
+				count++;
+				break;
+			case 1:
+				str1 = value.toString();
+				count++;
+				break;
+			case 2:
+				count++;
+				break;
+			case 3:
+				Qstr1 = value.toString();
+				minimal1 = 'J';
+				int QstrLen1 = Qstr1.length();
 
-			/* extract MinimalQ1,MinimalQ2 */
-			result.set(lineArray[2].charAt(0) + "," + (lineArray[5].charAt(0)));
-			context.write(result, null);
+				if (!str1.contains("N")) {
+					for (int i = 0; i < QstrLen1; i++) {
+						minimal1 = (minimal1 < Qstr1.charAt(i)) ? minimal1 : Qstr1.charAt(i);
+					}
+				}
+				count++;
+				break;
+			case 4:
+				id2 = value.toString().split(" ", 2);
+				count++;
+				break;
+			case 5:
+				str2 = value.toString();
+				count++;
+				break;
+			case 6:
+				count++;
+				break;
+			case 7:
+				Qstr2 = value.toString();
+				String device1 = id1[0];
+				String device2 = id2[0];
+				minimal2 = 'J';
+				int QstrLen2 = Qstr2.length();
+
+				if ((!str1.contains("N")) && (!str2.contains("N"))) {
+					/*
+					 * varify that Read1 is pair with Read2 using it's
+					 * corresponding id information
+					 */
+					if (device1.equals(device2)) {
+						for (int i = 0; i < QstrLen2; i++) {
+							minimal2 = (minimal2 < Qstr2.charAt(i)) ? minimal2 : Qstr2.charAt(i);
+						}
+
+						result.set(minimal1 + "," + minimal2);
+
+						context.write(result, null);
+
+					}
+				}
+				count = 0;
+				break;
+			}
 		}
 	}
 
@@ -91,11 +161,13 @@ public class PEMQExtractor {
 			}
 		}
 
+		NLineInputFormat.setNumLinesPerSplit(job, 100000);
+
+		job.setInputFormatClass(NLineInputFormat.class);
 		job.setOutputKeyClass(Text.class);
 		job.setOutputValueClass(LongWritable.class);
 		job.setMapperClass(Map.class);
 		job.setNumReduceTasks(numOfReducers);
-		job.setInputFormatClass(TextInputFormat.class);
 		job.setOutputFormatClass(TextOutputFormat.class);
 
 		FileInputFormat.addInputPath(job, new Path(args[0]));
